@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>기숙사 출석체크</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root{--bg:#f5f6fa;--card:#fff;--tx:#1d2330;--mut:#6b7385;--pri:#3b5bdb;--ok:#2f9e44;--no:#e03131;--bd:#e3e6ee}
+@media (prefers-color-scheme:dark){:root{--bg:#14161c;--card:#1e222b;--tx:#eceff5;--mut:#9aa3b5;--pri:#748ffc;--ok:#51cf66;--no:#ff6b6b;--bd:#2d3340}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:-apple-system,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;line-height:1.5}
+.wrap{max-width:560px;margin:0 auto;padding:16px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:16px;margin-bottom:12px}
+.date{font-size:22px;font-weight:700}.clock{font-size:34px;font-weight:800;font-variant-numeric:tabular-nums}
+.mut{color:var(--mut);font-size:14px}
+.badge{display:inline-block;padding:4px 12px;border-radius:99px;font-weight:700;font-size:14px;margin-top:6px}
+.open{background:var(--ok);color:#fff}.wait{background:var(--bd);color:var(--tx)}.closed{background:var(--no);color:#fff}
+select,input,textarea,button{font:inherit;font-size:16px}
+select,input,textarea{width:100%;padding:12px;border:1px solid var(--bd);border-radius:10px;background:var(--bg);color:var(--tx)}
+button{border:0;border-radius:10px;padding:12px 16px;background:var(--pri);color:#fff;font-weight:700;cursor:pointer}
+button.big{width:100%;margin-top:10px;padding:16px;font-size:18px}
+button:disabled{opacity:.4;cursor:not-allowed}
+button.sec{background:var(--bd);color:var(--tx)}
+.row{display:flex;gap:8px}
+h2{font-size:17px;margin:0 0 10px}
+.msg{margin-top:10px;font-weight:700}.ok{color:var(--ok)}.no{color:var(--no)}
+ul{list-style:none;margin:0;padding:0}
+li{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--bd)}
+li button{padding:6px 10px;font-size:13px}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:420px){.cols{grid-template-columns:1fr}}
+.tabs{display:flex;gap:8px;margin-bottom:12px}.tabs button{flex:1}
+.hide{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="date" id="date">불러오는 중...</div>
+    <div class="clock" id="clock"></div>
+    <div class="mut">체크 시간: 매일 23:00 ~ 23:30 (한국 시간)</div>
+    <span class="badge wait" id="status"></span>
+  </div>
+  <div class="tabs"><button id="tabS">학생 출석</button><button id="tabA" class="sec">관리자</button></div>
+
+  <div id="student" class="card">
+    <h2>내 이름 선택</h2>
+    <select id="who"></select>
+    <button class="big" id="go">출석 체크</button>
+    <div class="msg" id="smsg"></div>
+  </div>
+
+  <div id="admin" class="hide">
+    <div class="card" id="login">
+      <h2>관리자 로그인</h2>
+      <div class="row"><input type="password" id="pw" placeholder="암호"><button id="loginBtn" style="width:90px">입장</button></div>
+      <div class="msg no" id="lmsg"></div>
+    </div>
+    <div id="panel" class="hide">
+      <div class="card">
+        <h2>오늘 현황 <span class="mut" id="count"></span></h2>
+        <div class="cols">
+          <div><b class="ok">✅ 출석</b><ul id="okList"></ul></div>
+          <div><b class="no">❌ 미출석</b><ul id="noList"></ul></div>
+        </div>
+        <button class="sec big" id="refresh">새로고침</button>
+      </div>
+      <div class="card">
+        <h2>학생 명단 관리</h2>
+        <div class="mut" style="margin-bottom:8px">한 줄에 한 명씩 "호실 이름" 형식 (예: 102/1202 차지윤)</div>
+        <textarea id="roster" rows="8"></textarea>
+        <button class="big" id="saveRoster">명단 저장</button>
+        <div class="msg" id="rmsg"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = "https://script.google.com/macros/s/AKfycbw6XfBqvEA_T1qVihchGI7gplLkq71tZU8cNfCSct9YGjyDWHEzgeEnphiLG3WrEhN5UA/exec";
+
+const $=id=>document.getElementById(id);
+const DAYS=["일","월","화","수","목","금","토"];
+let students=[],checked=[],offset=0,pw=null;
+
+async function call(body){
+  const r=await fetch(API,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(body)});
+  return r.json();
+}
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+function kst(){
+  const p=Object.fromEntries(new Intl.DateTimeFormat("en-US",{timeZone:"Asia/Seoul",hourCycle:"h23",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit"}).formatToParts(new Date(Date.now()+offset)).map(x=>[x.type,x.value]));
+  const dow=DAYS[new Date(Date.UTC(+p.year,+p.month-1,+p.day)).getUTCDay()];
+  return{y:+p.year,m:+p.month,d:+p.day,dow,h:p.hour,mi:p.minute,s:p.second,mins:+p.hour*60+ +p.minute};
+}
+function tick(){
+  const t=kst(),ph=t.mins<1380?"wait":t.mins<1410?"open":"closed";
+  $("date").textContent=`${t.y}년 ${t.m}월 ${t.d}일 (${t.dow}요일)`;
+  $("clock").textContent=`${t.h}:${t.mi}:${t.s}`;
+  $("status").className="badge "+ph;
+  $("status").textContent=ph==="open"?"출석 체크 진행 중":ph==="wait"?"아직 체크 시간이 아닙니다 (23:00 시작)":"체크 마감 (23:30 종료)";
+  $("go").disabled=ph!=="open"||!$("who").value;
+}
+function renderSelect(){
+  const rooms=[...new Set(students.map(s=>s.room))];
+  $("who").innerHTML='<option value="">-- 이름을 선택하세요 --</option>'+rooms.map(rm=>`<optgroup label="${esc(rm||"호실 미지정")}">`+students.filter(s=>s.room===rm).map(s=>`<option value="${esc(s.key)}">${esc(s.name)}</option>`).join("")+"</optgroup>").join("");
+}
+function renderAdmin(){
+  const map=Object.fromEntries(checked.map(c=>[c.key,c]));
+  const ok=students.filter(s=>map[s.key]),no=students.filter(s=>!map[s.key]);
+  $("count").textContent=`(출석 ${ok.length} / 미출석 ${no.length} / 전체 ${students.length})`;
+  $("okList").innerHTML=ok.map(s=>`<li><span>${esc(s.name)} <span class="mut">${esc(s.room)}</span><br><span class="mut">${esc(map[s.key].time)} · ${esc(map[s.key].by)}</span></span><button class="sec" data-k="${esc(s.key)}" data-on="0">취소</button></li>`).join("")||'<li class="mut">없음</li>';
+  $("noList").innerHTML=no.map(s=>`<li><span>${esc(s.name)} <span class="mut">${esc(s.room)}</span></span><button data-k="${esc(s.key)}" data-on="1">체크</button></li>`).join("")||'<li class="mut">없음</li>';
+}
+async function loadAdmin(){
+  const r=await call({action:"adminState",pw});
+  if(!r.ok)return;
+  students=r.students;checked=r.checked;renderSelect();renderAdmin();
+}
+
+$("go").onclick=async()=>{
+  const m=$("smsg");m.className="msg";m.textContent="처리 중...";$("go").disabled=true;
+  try{const r=await call({action:"checkin",key:$("who").value});m.className="msg "+(r.ok?"ok":"no");m.textContent=r.msg;}
+  catch(e){m.className="msg no";m.textContent="연결 오류. 다시 시도하세요.";}
+  tick();
+};
+$("who").onchange=tick;
+$("tabS").onclick=()=>{$("student").classList.remove("hide");$("admin").classList.add("hide");$("tabS").classList.remove("sec");$("tabA").classList.add("sec");};
+$("tabA").onclick=()=>{$("admin").classList.remove("hide");$("student").classList.add("hide");$("tabA").classList.remove("sec");$("tabS").classList.add("sec");};
+$("loginBtn").onclick=async()=>{
+  const p=$("pw").value;
+  try{const r=await call({action:"login",pw:p});
+    if(r.ok){pw=p;$("login").classList.add("hide");$("panel").classList.remove("hide");
+      await loadAdmin();$("roster").value=students.map(s=>(s.room?s.room+" ":"")+s.name).join("\n");setInterval(loadAdmin,15000);}
+    else $("lmsg").textContent=r.msg;
+  }catch(e){$("lmsg").textContent="연결 오류";}
+};
+$("pw").onkeydown=e=>{if(e.key==="Enter")$("loginBtn").click();};
+$("refresh").onclick=loadAdmin;
+$("saveRoster").onclick=async()=>{
+  const r=await call({action:"saveRoster",pw,lines:$("roster").value.split("\n")});
+  $("rmsg").className="msg "+(r.ok?"ok":"no");$("rmsg").textContent=r.ok?"저장되었습니다.":r.msg;
+  if(r.ok)loadAdmin();
+};
+document.addEventListener("click",async e=>{
+  const k=e.target.dataset.k;if(!k)return;
+  e.target.disabled=true;
+  await call({action:"adminSet",pw,key:k,on:e.target.dataset.on==="1"});
+  loadAdmin();
+});
+
+(async()=>{
+  setInterval(tick,1000);tick();
+  try{const r=await call({action:"state"});offset=r.now.ms-Date.now();students=r.students;renderSelect();tick();}
+  catch(e){$("smsg").className="msg no";$("smsg").textContent="서버 연결 실패. API 주소를 확인하세요.";}
+})();
+</script>
+</body>
+</html>
