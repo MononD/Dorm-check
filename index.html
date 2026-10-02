@@ -66,6 +66,15 @@ li button{padding:6px 10px;font-size:13px}
         <button class="sec big" id="refresh">새로고침</button>
       </div>
       <div class="card">
+        <h2>지난 출석 기록</h2>
+        <input type="date" id="hdate">
+        <div class="msg mut" id="hcount"></div>
+        <div class="cols">
+          <div><b class="ok">✅ 출석</b><ul id="hOk"></ul></div>
+          <div><b class="no">❌ 미출석</b><ul id="hNo"></ul></div>
+        </div>
+      </div>
+      <div class="card">
         <h2>학생 명단 관리</h2>
         <div class="mut" style="margin-bottom:8px">한 줄에 한 명씩 "호실 이름" 형식 (예: 102/1202 차지윤)</div>
         <textarea id="roster" rows="8"></textarea>
@@ -141,6 +150,19 @@ $("saveRoster").onclick=async()=>{
   const r=await call({action:"saveRoster",pw,lines:$("roster").value.split("\n")});
   $("rmsg").className="msg "+(r.ok?"ok":"no");$("rmsg").textContent=r.ok?"저장되었습니다.":r.msg;
   if(r.ok)loadAdmin();
+};
+$("hdate").onchange=async()=>{
+  const d=$("hdate").value;if(!d)return;
+  $("hcount").textContent="불러오는 중...";
+  try{
+    const r=await call({action:"history",pw,date:d});
+    if(!r.ok){$("hcount").textContent=r.msg||"조회 실패";return;}
+    const map=Object.fromEntries(r.checked.map(c=>[c.key,c]));
+    const ok=r.students.filter(s=>map[s.key]),no=r.students.filter(s=>!map[s.key]);
+    $("hcount").textContent=`${d} · 출석 ${ok.length} / 미출석 ${no.length}`;
+    $("hOk").innerHTML=ok.map(s=>`<li><span>${esc(s.name)} <span class="mut">${esc(s.room)}</span><br><span class="mut">${esc(map[s.key].time)}</span></span></li>`).join("")||'<li class="mut">없음</li>';
+    $("hNo").innerHTML=no.map(s=>`<li><span>${esc(s.name)} <span class="mut">${esc(s.room)}</span></span></li>`).join("")||'<li class="mut">없음</li>';
+  }catch(e){$("hcount").textContent="연결 오류";}
 };
 document.addEventListener("click",async e=>{
   const k=e.target.dataset.k;if(!k)return;
