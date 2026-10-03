@@ -19,14 +19,17 @@ select,input,textarea,button{font:inherit;font-size:16px}
 select,input,textarea{width:100%;padding:12px;border:1px solid var(--bd);border-radius:10px;background:var(--bg);color:var(--tx)}
 button{border:0;border-radius:10px;padding:12px 16px;background:var(--pri);color:#fff;font-weight:700;cursor:pointer}
 button.big{width:100%;margin-top:10px;padding:16px;font-size:18px}
+button.late{background:var(--no)}
 button:disabled{opacity:.4;cursor:not-allowed}
 button.sec{background:var(--bd);color:var(--tx)}
 .row{display:flex;gap:8px}
 h2{font-size:17px;margin:0 0 10px}
 .msg{margin-top:10px;font-weight:700}.ok{color:var(--ok)}.no{color:var(--no)}
+.redname{color:var(--no);font-weight:700}
 ul{list-style:none;margin:0;padding:0}
-li{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--bd)}
+li{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;padding:8px 0;border-bottom:1px solid var(--bd)}
 li button{padding:6px 10px;font-size:13px}
+.btns{display:flex;gap:6px}
 .cols{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 @media(max-width:420px){.cols{grid-template-columns:1fr}}
 .tabs{display:flex;gap:8px;margin-bottom:12px}.tabs button{flex:1}
@@ -38,8 +41,9 @@ li button{padding:6px 10px;font-size:13px}
   <div class="card">
     <div class="date" id="date">불러오는 중...</div>
     <div class="clock" id="clock"></div>
-    <div class="mut">체크 시간: 매일 23:00 ~ 23:30 (한국 시간)</div>
+    <div class="mut">정상 23:00~23:30 · 시간외 23:30~다음날 09:00</div>
     <span class="badge wait" id="status"></span>
+    <div class="mut" id="base"></div>
   </div>
   <div class="tabs"><button id="tabS">학생 출석</button><button id="tabA" class="sec">관리자</button></div>
 
@@ -58,8 +62,9 @@ li button{padding:6px 10px;font-size:13px}
     </div>
     <div id="panel" class="hide">
       <div class="card">
-        <h2>오늘 현황 <span class="mut" id="count"></span></h2>
-        <div class="cols">
+        <h2>출석 현황</h2>
+        <div class="mut" id="count"></div>
+        <div class="cols" style="margin-top:8px">
           <div><b class="ok">✅ 출석</b><ul id="okList"></ul></div>
           <div><b class="no">❌ 미출석</b><ul id="noList"></ul></div>
         </div>
@@ -90,63 +95,98 @@ const API = "https://script.google.com/macros/s/AKfycbwx6rHPdutfX4fBHiHlKeywaLvf
 
 const $=id=>document.getElementById(id);
 const DAYS=["일","월","화","수","목","금","토"];
-let students=[],checked=[],offset=0,pw=null;
+let students=[],checked=[],offset=0,pw=null,pollTimer=null,sdate="";
 
 async function call(body){
   const r=await fetch(API,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(body)});
   return r.json();
 }
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+function phaseOf(m){return m>=1380&&m<1410?"normal":(m>=1410||m<540)?"late":"wait";}
 function kst(){
   const p=Object.fromEntries(new Intl.DateTimeFormat("en-US",{timeZone:"Asia/Seoul",hourCycle:"h23",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit"}).formatToParts(new Date(Date.now()+offset)).map(x=>[x.type,x.value]));
-  const dow=DAYS[new Date(Date.UTC(+p.year,+p.month-1,+p.day)).getUTCDay()];
-  return{y:+p.year,m:+p.month,d:+p.day,dow,h:p.hour,mi:p.minute,s:p.second,mins:+p.hour*60+ +p.minute};
+  const mins=+p.hour*60+ +p.minute;
+  const dt=new Date(Date.UTC(+p.year,+p.month-1,+p.day));
+  const bd=new Date(Date.UTC(+p.year,+p.month-1,+p.day-(mins<540?1:0)));
+  return{y:+p.year,m:+p.month,d:+p.day,dow:DAYS[dt.getUTCDay()],h:p.hour,mi:p.minute,s:p.second,mins,
+    bm:bd.getUTCMonth()+1,bd:bd.getUTCDate(),bdow:DAYS[bd.getUTCDay()]};
 }
 function tick(){
-  const t=kst(),ph=t.mins<1380?"wait":t.mins<1410?"open":"closed";
+  const t=kst(),ph=phaseOf(t.mins);
   $("date").textContent=`${t.y}년 ${t.m}월 ${t.d}일 (${t.dow}요일)`;
   $("clock").textContent=`${t.h}:${t.mi}:${t.s}`;
-  $("status").className="badge "+ph;
-  $("status").textContent=ph==="open"?"출석 체크 진행 중":ph==="wait"?"아직 체크 시간이 아닙니다 (23:00 시작)":"체크 마감 (23:30 종료)";
-  $("go").disabled=ph!=="open"||!$("who").value;
+  $("status").className="badge "+(ph==="normal"?"open":ph==="late"?"closed":"wait");
+  $("status").textContent=ph==="normal"?"정상 출석 진행 중 (23:30까지)":ph==="late"?"시간 외 · 시간외로 기록됩니다":"체크 시간이 아닙니다 (23:00 시작)";
+  $("base").textContent=ph==="wait"?"":`출석 기준일: ${t.bm}월 ${t.bd}일 (${t.bdow})`;
+  const go=$("go");
+  go.disabled=ph==="wait"||!$("who").value;
+  go.className="big"+(ph==="late"?" late":"");
+  go.textContent=ph==="late"?"시간 외 출석 체크":"출석 체크";
 }
 function renderSelect(){
+  const prev=$("who").value;
   const rooms=[...new Set(students.map(s=>s.room))];
   $("who").innerHTML='<option value="">-- 이름을 선택하세요 --</option>'+rooms.map(rm=>`<optgroup label="${esc(rm||"호실 미지정")}">`+students.filter(s=>s.room===rm).map(s=>`<option value="${esc(s.key)}">${esc(s.name)}</option>`).join("")+"</optgroup>").join("");
+  $("who").value=prev;
+}
+function okLi(s,r,btn){
+  const late=r.type==="시간외";
+  return `<li><span class="${late?"redname":""}">${esc(s.name)} <span class="${late?"redname":"mut"}">${esc(s.room)}</span>${late?" [시간외]":""}<br><span class="mut">${esc(r.time)}${r.by?" · "+esc(r.by):""}</span></span>${btn?`<button class="sec" data-k="${esc(s.key)}" data-on="0">취소</button>`:""}</li>`;
+}
+function split(list,chk){
+  const map=Object.fromEntries(chk.map(c=>[c.key,c]));
+  const ok=list.filter(s=>map[s.key]).sort((a,b)=>(map[a.key].type==="시간외")-(map[b.key].type==="시간외"));
+  return{map,ok,no:list.filter(s=>!map[s.key])};
 }
 function renderAdmin(){
-  const map=Object.fromEntries(checked.map(c=>[c.key,c]));
-  const ok=students.filter(s=>map[s.key]),no=students.filter(s=>!map[s.key]);
-  $("count").textContent=`(출석 ${ok.length} / 미출석 ${no.length} / 전체 ${students.length})`;
-  $("okList").innerHTML=ok.map(s=>`<li><span>${esc(s.name)} <span class="mut">${esc(s.room)}</span><br><span class="mut">${esc(map[s.key].time)} · ${esc(map[s.key].by)}</span></span><button class="sec" data-k="${esc(s.key)}" data-on="0">취소</button></li>`).join("")||'<li class="mut">없음</li>';
-  $("noList").innerHTML=no.map(s=>`<li><span>${esc(s.name)} <span class="mut">${esc(s.room)}</span></span><button data-k="${esc(s.key)}" data-on="1">체크</button></li>`).join("")||'<li class="mut">없음</li>';
+  const{map,ok,no}=split(students,checked);
+  const late=ok.filter(s=>map[s.key].type==="시간외").length;
+  $("count").textContent=`기준일 ${sdate} · 정상 ${ok.length-late} / 시간외 ${late} / 미출석 ${no.length} / 전체 ${students.length}`;
+  $("okList").innerHTML=ok.map(s=>okLi(s,map[s.key],true)).join("")||'<li class="mut">없음</li>';
+  $("noList").innerHTML=no.map(s=>`<li><span>${esc(s.name)} <span class="mut">${esc(s.room)}</span></span><span class="btns"><button data-k="${esc(s.key)}" data-on="1" data-t="정상">정상</button><button class="late" data-k="${esc(s.key)}" data-on="1" data-t="시간외">시간외</button></span></li>`).join("")||'<li class="mut">없음</li>';
 }
 async function loadAdmin(){
   const r=await call({action:"adminState",pw});
   if(!r.ok)return;
-  students=r.students;checked=r.checked;renderSelect();renderAdmin();
+  students=r.students;checked=r.checked;sdate=r.now.sdate;renderSelect();renderAdmin();
 }
 
 $("go").onclick=async()=>{
   const m=$("smsg");m.className="msg";m.textContent="처리 중...";$("go").disabled=true;
-  try{const r=await call({action:"checkin",key:$("who").value});m.className="msg "+(r.ok?"ok":"no");m.textContent=r.msg;}
-  catch(e){m.className="msg no";m.textContent="연결 오류. 다시 시도하세요.";}
+  const key=$("who").value;
+  for(let i=1;i<=3;i++){
+    try{
+      const r=await call({action:"checkin",key});
+      m.className="msg "+(r.ok&&r.type!=="시간외"?"ok":"no");m.textContent=r.msg;break;
+    }catch(e){
+      if(i===3){m.className="msg no";m.textContent="연결 오류. 잠시 후 다시 눌러주세요.";}
+      else await new Promise(r=>setTimeout(r,1500));
+    }
+  }
   tick();
 };
 $("who").onchange=tick;
 $("tabS").onclick=()=>{$("student").classList.remove("hide");$("admin").classList.add("hide");$("tabS").classList.remove("sec");$("tabA").classList.add("sec");};
 $("tabA").onclick=()=>{$("admin").classList.remove("hide");$("student").classList.add("hide");$("tabA").classList.remove("sec");$("tabS").classList.add("sec");};
 $("loginBtn").onclick=async()=>{
-  const p=$("pw").value;
-  try{const r=await call({action:"login",pw:p});
-    if(r.ok){pw=p;$("login").classList.add("hide");$("panel").classList.remove("hide");
-      await loadAdmin();$("roster").value=students.map(s=>(s.room?s.room+" ":"")+s.name).join("\n");setInterval(loadAdmin,15000);}
-    else $("lmsg").textContent=r.msg;
-  }catch(e){$("lmsg").textContent="연결 오류";}
+  const p=$("pw").value,b=$("loginBtn");
+  b.disabled=true;$("lmsg").className="msg mut";$("lmsg").textContent="확인 중...";
+  try{
+    const r=await call({action:"adminState",pw:p});
+    if(r.ok){
+      pw=p;students=r.students;checked=r.checked;sdate=r.now.sdate;
+      $("login").classList.add("hide");$("panel").classList.remove("hide");
+      renderSelect();renderAdmin();
+      $("roster").value=students.map(s=>(s.room?s.room+" ":"")+s.name).join("\n");
+      if(!pollTimer)pollTimer=setInterval(()=>{if(!document.hidden)loadAdmin();},30000);
+    }else{$("lmsg").className="msg no";$("lmsg").textContent=r.msg;}
+  }catch(e){$("lmsg").className="msg no";$("lmsg").textContent="연결 오류. 다시 시도하세요.";}
+  b.disabled=false;
 };
 $("pw").onkeydown=e=>{if(e.key==="Enter")$("loginBtn").click();};
 $("refresh").onclick=loadAdmin;
 $("saveRoster").onclick=async()=>{
+  $("rmsg").className="msg mut";$("rmsg").textContent="저장 중...";
   const r=await call({action:"saveRoster",pw,lines:$("roster").value.split("\n")});
   $("rmsg").className="msg "+(r.ok?"ok":"no");$("rmsg").textContent=r.ok?"저장되었습니다.":r.msg;
   if(r.ok)loadAdmin();
@@ -157,17 +197,17 @@ $("hdate").onchange=async()=>{
   try{
     const r=await call({action:"history",pw,date:d});
     if(!r.ok){$("hcount").textContent=r.msg||"조회 실패";return;}
-    const map=Object.fromEntries(r.checked.map(c=>[c.key,c]));
-    const ok=r.students.filter(s=>map[s.key]),no=r.students.filter(s=>!map[s.key]);
-    $("hcount").textContent=`${d} · 출석 ${ok.length} / 미출석 ${no.length}`;
-    $("hOk").innerHTML=ok.map(s=>`<li><span>${esc(s.name)} <span class="mut">${esc(s.room)}</span><br><span class="mut">${esc(map[s.key].time)}</span></span></li>`).join("")||'<li class="mut">없음</li>';
+    const{map,ok,no}=split(r.students,r.checked);
+    const late=ok.filter(s=>map[s.key].type==="시간외").length;
+    $("hcount").textContent=`${d} · 정상 ${ok.length-late} / 시간외 ${late} / 미출석 ${no.length}`;
+    $("hOk").innerHTML=ok.map(s=>okLi(s,map[s.key],false)).join("")||'<li class="mut">없음</li>';
     $("hNo").innerHTML=no.map(s=>`<li><span>${esc(s.name)} <span class="mut">${esc(s.room)}</span></span></li>`).join("")||'<li class="mut">없음</li>';
   }catch(e){$("hcount").textContent="연결 오류";}
 };
 document.addEventListener("click",async e=>{
   const k=e.target.dataset.k;if(!k)return;
   e.target.disabled=true;
-  await call({action:"adminSet",pw,key:k,on:e.target.dataset.on==="1"});
+  await call({action:"adminSet",pw,key:k,on:e.target.dataset.on==="1",type:e.target.dataset.t});
   loadAdmin();
 });
 
