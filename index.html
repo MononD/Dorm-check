@@ -195,7 +195,7 @@ $("go").onclick=async()=>{
   const m=$("smsg");busy=true;m.className="msg mut";m.textContent="처리 중...";tick();
   const key=$("who").value;
   try{
-    await sleep(Math.random()*3000);
+    await sleep(Math.random()*1000);
     const r=await callRetry({action:"checkin",key},6,(i,n)=>{m.textContent=`접속자가 많아 재시도 중... (${i}/${n-1})`;});
     m.className="msg "+(r.ok&&r.type!=="시간외"?"ok":"no");m.textContent=r.msg;
   }catch(e){m.className="msg no";m.textContent="연결 오류. 잠시 후 다시 눌러주세요.";}
