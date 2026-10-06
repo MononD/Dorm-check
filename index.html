@@ -93,13 +93,50 @@ li button{padding:6px 10px;font-size:13px}
 <script>
 const API = "https://script.google.com/macros/s/AKfycbwx6rHPdutfX4fBHiHlKeywaLvfQzUk99AfID-UAqFduSvjtFN3_p9TV2tM1NtcNMNDUg/exec";
 
+// 서버가 느려도 바로 이름이 뜨도록 내장한 기본 명단
+const DEFAULT_ROSTER = {
+  "102/1202": "차지윤 이현영 정수안",
+  "106/1202": "한수진 김예은 윤지연 정윤서",
+  "201/501": "서민영 조성빈 차명희 이연주",
+  "201/703": "이여진 김민서 박지은 서지윤",
+  "201/1204": "박예진 정윤정 김서하 임성하",
+  "201/1205": "신다민 장은아 이은비 정윤솔",
+  "202/501": "박시유 최수연 박경림 김고은 임혜인",
+  "202/701": "최다인 허윤서 이서윤 이수연",
+  "202/405": "김애슬 최하경 박민혜 최서윤 정다현",
+  "202/506": "구한나 손예린 홍예서 김려원"
+};
+
 const $=id=>document.getElementById(id);
 const DAYS=["일","월","화","수","목","금","토"];
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 let students=[],checked=[],offset=0,pw=null,pollTimer=null,sdate="";
+
+function defaultList(){
+  const l=[];
+  Object.keys(DEFAULT_ROSTER).forEach(room=>DEFAULT_ROSTER[room].split(" ").forEach(name=>l.push({room,name,key:room+"|"+name})));
+  return l;
+}
+function loadCached(){
+  try{const c=JSON.parse(localStorage.getItem("roster_v2"));if(c&&c.length)return c;}catch(e){}
+  return defaultList();
+}
+function saveCached(l){try{localStorage.setItem("roster_v2",JSON.stringify(l));}catch(e){}}
 
 async function call(body){
   const r=await fetch(API,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(body)});
   return r.json();
+}
+// 실패하면 간격을 늘려가며 자동 재시도 (사람이 몰릴 때 대비)
+async function callRetry(body,tries,onRetry){
+  for(let i=0;i<tries;i++){
+    try{return await call(body);}
+    catch(e){
+      if(i===tries-1)throw e;
+      if(onRetry)onRetry(i+1,tries);
+      await sleep(1000+i*1500+Math.random()*1500);
+    }
+  }
 }
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
 function phaseOf(m){return m>=1380&&m<1410?"normal":(m>=1410||m<540)?"late":"wait";}
@@ -119,7 +156,7 @@ function tick(){
   $("status").textContent=ph==="normal"?"정상 출석 진행 중 (23:30까지)":ph==="late"?"시간 외 · 시간외로 기록됩니다":"체크 시간이 아닙니다 (23:00 시작)";
   $("base").textContent=ph==="wait"?"":`출석 기준일: ${t.bm}월 ${t.bd}일 (${t.bdow})`;
   const go=$("go");
-  go.disabled=ph==="wait"||!$("who").value;
+  go.disabled=ph==="wait"||!$("who").value||busy;
   go.className="big"+(ph==="late"?" late":"");
   go.textContent=ph==="late"?"시간 외 출석 체크":"출석 체크";
 }
@@ -146,24 +183,22 @@ function renderAdmin(){
   $("noList").innerHTML=no.map(s=>`<li><span>${esc(s.name)} <span class="mut">${esc(s.room)}</span></span><span class="btns"><button data-k="${esc(s.key)}" data-on="1" data-t="정상">정상</button><button class="late" data-k="${esc(s.key)}" data-on="1" data-t="시간외">시간외</button></span></li>`).join("")||'<li class="mut">없음</li>';
 }
 async function loadAdmin(){
-  const r=await call({action:"adminState",pw});
-  if(!r.ok)return;
-  students=r.students;checked=r.checked;sdate=r.now.sdate;renderSelect();renderAdmin();
+  try{
+    const r=await call({action:"adminState",pw});
+    if(!r.ok)return;
+    students=r.students;saveCached(students);checked=r.checked;sdate=r.now.sdate;renderSelect();renderAdmin();
+  }catch(e){}
 }
 
+let busy=false;
 $("go").onclick=async()=>{
-  const m=$("smsg");m.className="msg";m.textContent="처리 중...";$("go").disabled=true;
+  const m=$("smsg");busy=true;m.className="msg mut";m.textContent="처리 중...";tick();
   const key=$("who").value;
-  for(let i=1;i<=3;i++){
-    try{
-      const r=await call({action:"checkin",key});
-      m.className="msg "+(r.ok&&r.type!=="시간외"?"ok":"no");m.textContent=r.msg;break;
-    }catch(e){
-      if(i===3){m.className="msg no";m.textContent="연결 오류. 잠시 후 다시 눌러주세요.";}
-      else await new Promise(r=>setTimeout(r,1500));
-    }
-  }
-  tick();
+  try{
+    const r=await callRetry({action:"checkin",key},6,(i,n)=>{m.textContent=`접속자가 많아 재시도 중... (${i}/${n-1})`;});
+    m.className="msg "+(r.ok&&r.type!=="시간외"?"ok":"no");m.textContent=r.msg;
+  }catch(e){m.className="msg no";m.textContent="연결 오류. 잠시 후 다시 눌러주세요.";}
+  busy=false;tick();
 };
 $("who").onchange=tick;
 $("tabS").onclick=()=>{$("student").classList.remove("hide");$("admin").classList.add("hide");$("tabS").classList.remove("sec");$("tabA").classList.add("sec");};
@@ -172,9 +207,9 @@ $("loginBtn").onclick=async()=>{
   const p=$("pw").value,b=$("loginBtn");
   b.disabled=true;$("lmsg").className="msg mut";$("lmsg").textContent="확인 중...";
   try{
-    const r=await call({action:"adminState",pw:p});
+    const r=await callRetry({action:"adminState",pw:p},4,(i)=>{$("lmsg").textContent=`접속자가 많아 재시도 중... (${i})`;});
     if(r.ok){
-      pw=p;students=r.students;checked=r.checked;sdate=r.now.sdate;
+      pw=p;students=r.students;saveCached(students);checked=r.checked;sdate=r.now.sdate;
       $("login").classList.add("hide");$("panel").classList.remove("hide");
       renderSelect();renderAdmin();
       $("roster").value=students.map(s=>(s.room?s.room+" ":"")+s.name).join("\n");
@@ -187,9 +222,11 @@ $("pw").onkeydown=e=>{if(e.key==="Enter")$("loginBtn").click();};
 $("refresh").onclick=loadAdmin;
 $("saveRoster").onclick=async()=>{
   $("rmsg").className="msg mut";$("rmsg").textContent="저장 중...";
-  const r=await call({action:"saveRoster",pw,lines:$("roster").value.split("\n")});
-  $("rmsg").className="msg "+(r.ok?"ok":"no");$("rmsg").textContent=r.ok?"저장되었습니다.":r.msg;
-  if(r.ok)loadAdmin();
+  try{
+    const r=await call({action:"saveRoster",pw,lines:$("roster").value.split("\n")});
+    $("rmsg").className="msg "+(r.ok?"ok":"no");$("rmsg").textContent=r.ok?"저장되었습니다.":r.msg;
+    if(r.ok)loadAdmin();
+  }catch(e){$("rmsg").className="msg no";$("rmsg").textContent="연결 오류";}
 };
 $("hdate").onchange=async()=>{
   const d=$("hdate").value;if(!d)return;
@@ -207,14 +244,20 @@ $("hdate").onchange=async()=>{
 document.addEventListener("click",async e=>{
   const k=e.target.dataset.k;if(!k)return;
   e.target.disabled=true;
-  await call({action:"adminSet",pw,key:k,on:e.target.dataset.on==="1",type:e.target.dataset.t});
+  try{await call({action:"adminSet",pw,key:k,on:e.target.dataset.on==="1",type:e.target.dataset.t});}catch(err){}
   loadAdmin();
 });
 
+// 시작: 저장된 명단으로 즉시 표시 → 백그라운드에서 최신 명단/서버 시간 갱신
+students=loadCached();renderSelect();
+setInterval(tick,1000);tick();
 (async()=>{
-  setInterval(tick,1000);tick();
-  try{const r=await call({action:"state"});offset=r.now.ms-Date.now();students=r.students;renderSelect();tick();}
-  catch(e){$("smsg").className="msg no";$("smsg").textContent="서버 연결 실패. API 주소를 확인하세요.";}
+  try{
+    const r=await callRetry({action:"state"},5);
+    offset=r.now.ms-Date.now();
+    if(r.students&&r.students.length){students=r.students;saveCached(students);renderSelect();}
+    tick();
+  }catch(e){}
 })();
 </script>
 </body>
