@@ -124,44 +124,8 @@ function loadCached(){
 function saveCached(l){try{localStorage.setItem("roster_v2",JSON.stringify(l));}catch(e){}}
 
 async function call(body){
-  const start = performance.now();
-
-  try {
-    const r = await fetch(API, {
-      method: "POST",
-      headers: {
-        "Content-Type": "text/plain;charset=utf-8"
-      },
-      body: JSON.stringify(body)
-    });
-
-    if (!r.ok) {
-      throw new Error("HTTP " + r.status);
-    }
-
-    const data = await r.json();
-
-    const seconds =
-      ((performance.now() - start) / 1000).toFixed(2);
-
-    if (body.action === "checkin") {
-      console.log("출석 처리 시간:", seconds, "초");
-      alert("서버 응답 시간: " + seconds + "초");
-    }
-
-    return data;
-
-  } catch (error) {
-    const seconds =
-      ((performance.now() - start) / 1000).toFixed(2);
-
-    if (body.action === "checkin") {
-      console.log("출석 요청 실패:", seconds, error);
-      alert("요청 실패까지 걸린 시간: " + seconds + "초");
-    }
-
-    throw error;
-  }
+  const r=await fetch(API,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(body)});
+  return r.json();
 }
 // 실패하면 간격을 늘려가며 자동 재시도 (사람이 몰릴 때 대비)
 async function callRetry(body,tries,onRetry){
